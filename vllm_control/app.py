@@ -196,6 +196,19 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+class ModelDescription(BaseModel):
+    """Comprehensive model description for selection"""
+    purpose: str
+    best_for: List[str]
+    strengths: List[str]
+    weaknesses: List[str]
+    context_length: int
+    vram_usage: str
+    speed: str
+    special_capabilities: List[str]
+    recommended_for: str
+    not_recommended_for: str
+
 class ModelInfo(BaseModel):
     """Model information response"""
     name: str
@@ -205,6 +218,7 @@ class ModelInfo(BaseModel):
     status: str
     endpoint: Optional[str] = None
     avg_active_requests: Optional[float] = None
+    description: Optional[ModelDescription] = None
 
 class HealthResponse(BaseModel):
     """Health check response"""
@@ -489,6 +503,14 @@ async def list_models():
         # Get average metrics from history
         averages = metrics_history.get_model_averages(name)
 
+        # Parse description if available in config
+        description = None
+        if "description" in config:
+            try:
+                description = ModelDescription(**config["description"])
+            except Exception as e:
+                logger.warning(f"Failed to parse description for {name}: {e}")
+
         models_info[name] = ModelInfo(
             name=name,
             container=config["container"],
@@ -496,7 +518,8 @@ async def list_models():
             model_path=config["model_path"],
             status=status,
             endpoint=endpoint,
-            avg_active_requests=averages["avg_active_requests"]
+            avg_active_requests=averages["avg_active_requests"],
+            description=description
         )
 
     return models_info
