@@ -419,6 +419,28 @@
         // API base - use relative paths since we're served from the same origin now
         const API_BASE = '';
 
+        // Metrics history for rolling averages (stores last 30 samples = 5 minutes with 10-sec refresh)
+        const MAX_HISTORY = 30;
+        const metricsHistory = {
+            gpu: {},        // gpu[index] = { utilization: [], vramPercent: [] }
+            models: {}      // models[name] = { activeRequests: [] }
+        };
+
+        // Helper: Add value to history array, keeping max size
+        function addToHistory(arr, value) {
+            arr.push(value);
+            if (arr.length > MAX_HISTORY) {
+                arr.shift();
+            }
+        }
+
+        // Helper: Calculate average from array
+        function calculateAverage(arr) {
+            if (!arr || arr.length === 0) return null;
+            const sum = arr.reduce((a, b) => a + b, 0);
+            return sum / arr.length;
+        }
+
         async function apiCall(endpoint, method = 'GET') {
             const response = await fetch(`${API_BASE}${endpoint}`, { method });
             if (!response.ok) {
@@ -479,6 +501,26 @@
                     if (vramPercent > 90) vramClass = 'critical';
                     else if (vramPercent > 70) vramClass = 'high';
 
+                    // Store metrics in history
+                    if (!metricsHistory.gpu[gpu.index]) {
+                        metricsHistory.gpu[gpu.index] = {
+                            utilization: [],
+                            vramPercent: []
+                        };
+                    }
+                    if (gpu.utilization != null) {
+                        addToHistory(metricsHistory.gpu[gpu.index].utilization, gpu.utilization);
+                    }
+                    addToHistory(metricsHistory.gpu[gpu.index].vramPercent, parseFloat(vramPercent));
+
+                    // Calculate averages
+                    const avgUtilization = calculateAverage(metricsHistory.gpu[gpu.index].utilization);
+                    const avgVramPercent = calculateAverage(metricsHistory.gpu[gpu.index].vramPercent);
+
+                    // Format average display
+                    const utilizationAvg = avgUtilization != null ? `<div style="font-size: 12px; color: #666; margin-top: 3px;">Avg: ${avgUtilization.toFixed(1)}%</div>` : '';
+                    const vramAvg = avgVramPercent != null ? `<div style="font-size: 11px; color: #666; margin-top: 3px;">Avg: ${avgVramPercent.toFixed(1)}%</div>` : '';
+
                     gpuGrid.innerHTML += `
                         <div class="gpu-stat">
                             <div class="gpu-stat-label">GPU ${gpu.index}: ${gpu.name}</div>
@@ -491,6 +533,7 @@
                             <div class="vram-bar">
                                 <div class="vram-fill ${vramClass}" style="width: ${vramPercent}%"></div>
                             </div>
+                            ${vramAvg}
                         </div>
                         <div class="gpu-stat">
                             <div class="gpu-stat-label">Temperature</div>
@@ -503,6 +546,7 @@
                             <div class="gpu-stat-value">
                                 ${gpu.utilization || 'N/A'}<span class="gpu-stat-unit">%</span>
                             </div>
+                            ${utilizationAvg}
                         </div>
                         <div class="gpu-stat">
                             <div class="gpu-stat-label">Power Draw</div>
@@ -569,13 +613,25 @@
                     const genTokens = metrics['vllm:generation_tokens_total'] || 0;
                     const totalTokens = promptTokens + genTokens;
 
+                    // Store active requests in history
+                    if (!metricsHistory.models[name]) {
+                        metricsHistory.models[name] = {
+                            activeRequests: []
+                        };
+                    }
+                    addToHistory(metricsHistory.models[name].activeRequests, activeRequests);
+
+                    // Calculate average active requests
+                    const avgActiveRequests = calculateAverage(metricsHistory.models[name].activeRequests);
+                    const activeReqAvg = avgActiveRequests != null ? ` <span style="font-size: 11px; color: #3b82f6;">(avg: ${avgActiveRequests.toFixed(1)})</span>` : '';
+
                     metricsHTML = `
                         <div class="metrics-section">
                             <div class="metrics-header">⚡ Performance Metrics</div>
                             <div class="metrics-grid">
                                 <div class="metric-item">
                                     <span class="metric-label">Active Requests:</span>
-                                    <span class="metric-value">${activeRequests}</span>
+                                    <span class="metric-value">${activeRequests}${activeReqAvg}</span>
                                 </div>
                                 <div class="metric-item">
                                     <span class="metric-label">Waiting:</span>
