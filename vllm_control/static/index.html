@@ -215,6 +215,77 @@
             font-family: 'Courier New', monospace;
         }
 
+        /* Model Description Section */
+        .model-description {
+            background: #fefce8;
+            border: 2px solid #eab308;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .desc-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #eab308;
+        }
+
+        .desc-purpose {
+            font-size: 15px;
+            font-weight: bold;
+            color: #854d0e;
+        }
+
+        .desc-specs {
+            font-size: 11px;
+            color: #92400e;
+            background: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .desc-section {
+            margin-bottom: 10px;
+        }
+
+        .desc-label {
+            font-size: 12px;
+            font-weight: bold;
+            color: #92400e;
+            margin-bottom: 4px;
+        }
+
+        .desc-list {
+            margin: 0;
+            padding-left: 20px;
+            font-size: 12px;
+            color: #713f12;
+        }
+
+        .desc-list li {
+            margin-bottom: 3px;
+        }
+
+        .desc-strengths li {
+            color: #15803d;
+        }
+
+        .desc-weaknesses li {
+            color: #b91c1c;
+        }
+
+        .desc-recommendation {
+            margin-top: 10px;
+            padding: 8px;
+            background: #fef3c7;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #92400e;
+        }
+
         .model-info {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -604,12 +675,42 @@
                 }
             }
 
+            // Build description HTML if available
+            let descriptionHTML = '';
+            if (model.description) {
+                const desc = model.description;
+                descriptionHTML = `
+                    <div class="model-description">
+                        <div class="desc-header">
+                            <span class="desc-purpose">${desc.purpose}</span>
+                            <span class="desc-specs">${desc.context_length.toLocaleString()} tokens • ${desc.vram_usage} • ${desc.speed}</span>
+                        </div>
+                        <div class="desc-section">
+                            <div class="desc-label">✨ Best For:</div>
+                            <ul class="desc-list">${desc.best_for.map(item => `<li>${item}</li>`).join('')}</ul>
+                        </div>
+                        <div class="desc-section">
+                            <div class="desc-label">✅ Strengths:</div>
+                            <ul class="desc-list desc-strengths">${desc.strengths.map(item => `<li>${item}</li>`).join('')}</ul>
+                        </div>
+                        <div class="desc-section">
+                            <div class="desc-label">⚠️ Weaknesses:</div>
+                            <ul class="desc-list desc-weaknesses">${desc.weaknesses.map(item => `<li>${item}</li>`).join('')}</ul>
+                        </div>
+                        <div class="desc-recommendation">
+                            <strong>💡 Recommended for:</strong> ${desc.recommended_for}
+                        </div>
+                    </div>
+                `;
+            }
+
             card.innerHTML = `
                 <div class="model-header">
                     <div class="model-name">${name}</div>
                     <div class="status-badge status-${model.status}">${model.status}</div>
                 </div>
                 <div class="model-path">${model.model_path}</div>
+                ${descriptionHTML}
                 <div class="model-info">
                     <div class="info-item">
                         <div class="info-label">Container</div>
