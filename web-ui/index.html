@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vLLM Control Panel - Akili</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            border-radius: 10px;
+            padding: 20px 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #667eea;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .status-bar {
+            background: white;
+            border-radius: 10px;
+            padding: 20px 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .models-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+        }
+
+        .model-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .model-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .model-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 15px;
+        }
+
+        .model-name {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            flex: 1;
+        }
+
+        .status-badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-running {
+            background: #10b981;
+            color: white;
+        }
+
+        .status-created, .status-exited {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .status-not_found {
+            background: #6b7280;
+            color: white;
+        }
+
+        .model-path {
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 10px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .model-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f9fafb;
+            border-radius: 5px;
+        }
+
+        .info-item {
+            font-size: 13px;
+        }
+
+        .info-label {
+            color: #666;
+            font-weight: 600;
+        }
+
+        .info-value {
+            color: #333;
+            font-family: 'Courier New', monospace;
+        }
+
+        .model-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-start {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-start:hover:not(:disabled) {
+            background: #059669;
+        }
+
+        .btn-stop {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-stop:hover:not(:disabled) {
+            background: #dc2626;
+        }
+
+        .btn-endpoint {
+            background: #667eea;
+            color: white;
+            grid-column: 1 / -1;
+        }
+
+        .btn-endpoint:hover:not(:disabled) {
+            background: #5568d3;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: white;
+            font-size: 18px;
+        }
+
+        .error {
+            background: #fee2e2;
+            border: 1px solid #ef4444;
+            color: #991b1b;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .refresh-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #667eea;
+            color: white;
+            font-size: 24px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+        }
+
+        .refresh-btn:hover {
+            background: #5568d3;
+            transform: rotate(180deg);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>vLLM Control Panel</h1>
+            <div class="subtitle">Manage inference models on Akili GPU Server</div>
+        </header>
+
+        <div class="status-bar" id="statusBar">
+            <div class="stat">
+                <div class="stat-label">Total Models</div>
+                <div class="stat-value" id="totalModels">-</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Running</div>
+                <div class="stat-value" id="runningModels">-</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">API Status</div>
+                <div class="stat-value" id="apiStatus">-</div>
+            </div>
+        </div>
+
+        <div id="errorContainer"></div>
+        <div id="modelsContainer" class="loading">Loading models...</div>
+    </div>
+
+    <button class="refresh-btn" onclick="loadModels()" title="Refresh">↻</button>
+
+    <script>
+        const API_BASE = 'http://akili.lab.rodhouse.net:8100';
+
+        async function apiCall(endpoint, method = 'GET') {
+            const response = await fetch(`${API_BASE}${endpoint}`, { method });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return await response.json();
+        }
+
+        async function loadModels() {
+            const container = document.getElementById('modelsContainer');
+            const errorContainer = document.getElementById('errorContainer');
+            errorContainer.innerHTML = '';
+
+            try {
+                const models = await apiCall('/models');
+                const modelsList = Object.entries(models);
+
+                // Update status bar
+                document.getElementById('totalModels').textContent = modelsList.length;
+                const runningCount = modelsList.filter(([_, m]) => m.status === 'running').length;
+                document.getElementById('runningModels').textContent = runningCount;
+                document.getElementById('apiStatus').textContent = '✓';
+                document.getElementById('apiStatus').style.color = '#10b981';
+
+                // Build models grid
+                container.innerHTML = '';
+                container.className = 'models-grid';
+
+                modelsList.forEach(([name, model]) => {
+                    const card = createModelCard(name, model);
+                    container.appendChild(card);
+                });
+
+            } catch (error) {
+                errorContainer.innerHTML = `<div class="error">Failed to load models: ${error.message}</div>`;
+                container.innerHTML = '';
+                document.getElementById('apiStatus').textContent = '✗';
+                document.getElementById('apiStatus').style.color = '#ef4444';
+            }
+        }
+
+        function createModelCard(name, model) {
+            const card = document.createElement('div');
+            card.className = 'model-card';
+            card.innerHTML = `
+                <div class="model-header">
+                    <div class="model-name">${name}</div>
+                    <div class="status-badge status-${model.status}">${model.status}</div>
+                </div>
+                <div class="model-path">${model.model_path}</div>
+                <div class="model-info">
+                    <div class="info-item">
+                        <div class="info-label">Container</div>
+                        <div class="info-value">${model.container}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Port</div>
+                        <div class="info-value">${model.port}</div>
+                    </div>
+                </div>
+                <div class="model-actions">
+                    <button class="btn-start" onclick="startModel('${name}')"
+                        ${model.status === 'running' ? 'disabled' : ''}>
+                        Start
+                    </button>
+                    <button class="btn-stop" onclick="stopModel('${name}')"
+                        ${model.status !== 'running' ? 'disabled' : ''}>
+                        Stop
+                    </button>
+                    ${model.endpoint ? `
+                        <button class="btn-endpoint" onclick="window.open('${model.endpoint}/docs', '_blank')">
+                            Open API Docs
+                        </button>
+                    ` : ''}
+                </div>
+            `;
+            return card;
+        }
+
+        async function startModel(name) {
+            try {
+                await apiCall(`/models/${name}/start`, 'POST');
+                setTimeout(loadModels, 2000); // Reload after 2s to show starting state
+                setTimeout(loadModels, 10000); // Reload after 10s to show running state
+            } catch (error) {
+                alert(`Failed to start ${name}: ${error.message}`);
+            }
+        }
+
+        async function stopModel(name) {
+            try {
+                await apiCall(`/models/${name}/stop`, 'POST');
+                setTimeout(loadModels, 2000);
+            } catch (error) {
+                alert(`Failed to stop ${name}: ${error.message}`);
+            }
+        }
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadModels, 30000);
+
+        // Initial load
+        loadModels();
+    </script>
+</body>
+</html>
