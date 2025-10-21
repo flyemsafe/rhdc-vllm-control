@@ -51,3 +51,6 @@ vllm-control = "vllm_control.__main__:main"
 where = ["."]
 include = ["vllm_control*"]
 exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+vllm_control = ["static/*"]

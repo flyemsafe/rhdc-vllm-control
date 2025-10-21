@@ -24,6 +24,8 @@ from pathlib import Path
 from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import requests
 import yaml
@@ -357,9 +359,9 @@ async def handle_eviction(model_name: str, eviction_policy: EvictionPolicy) -> D
 
     return {"evicted": evicted}
 
-@app.get("/", response_model=dict)
-async def root():
-    """API root - returns basic info"""
+@app.get("/api/info", response_model=dict)
+async def api_info():
+    """API info - returns basic information about the API"""
     return {
         "service": "vLLM On-Demand Control API",
         "version": "1.0.0",
@@ -367,9 +369,11 @@ async def root():
         "endpoints": {
             "health": "/health",
             "models": "/models",
+            "gpu": "/api/gpu",
             "start": "/models/{model_name}/start",
             "stop": "/models/{model_name}/stop",
-            "status": "/models/{model_name}/status"
+            "status": "/models/{model_name}/status",
+            "web_ui": "/"
         }
     }
 
@@ -635,6 +639,64 @@ async def restart_model(model_name: str):
     time.sleep(2)  # Brief pause
     # Start
     return await start_model(model_name)
+
+@app.get("/api/gpu")
+async def get_gpu_status():
+    """
+    Get GPU hardware status from nvidia-smi
+
+    Returns VRAM usage, temperature, utilization, and power draw
+    for all GPUs in the system.
+    """
+    try:
+        # Query nvidia-smi for GPU stats
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit",
+                "--format=csv,noheader,nounits"
+            ],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        gpus = []
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+
+            parts = [p.strip() for p in line.split(',')]
+            if len(parts) < 8:
+                continue
+
+            gpus.append({
+                "index": int(parts[0]),
+                "name": parts[1],
+                "temperature": float(parts[2]) if parts[2] != '[N/A]' else None,
+                "utilization": float(parts[3]) if parts[3] != '[N/A]' else None,
+                "memory_used_mb": int(parts[4]) if parts[4] != '[N/A]' else None,
+                "memory_total_mb": int(parts[5]) if parts[5] != '[N/A]' else None,
+                "power_draw_w": float(parts[6]) if parts[6] != '[N/A]' else None,
+                "power_limit_w": float(parts[7]) if parts[7] != '[N/A]' else None,
+            })
+
+        return {"gpus": gpus}
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"nvidia-smi command failed: {e.stderr}")
+        raise HTTPException(status_code=500, detail=f"Failed to query GPU: {e.stderr}")
+    except Exception as e:
+        logger.error(f"Error getting GPU status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Mount static files for web UI (must be last, as it catches all paths)
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+    logger.info(f"Serving web UI from {static_dir}")
+else:
+    logger.warning(f"Static directory not found: {static_dir}")
 
 if __name__ == "__main__":
     import uvicorn
