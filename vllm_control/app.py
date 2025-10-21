@@ -18,10 +18,13 @@ import subprocess
 import time
 import logging
 import re
+import asyncio
+from collections import deque
 from typing import Dict, Optional, List, Tuple
 from datetime import datetime
 from pathlib import Path
 from enum import Enum
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
@@ -105,10 +108,92 @@ MODELS = load_models_config()
 # Track last activity time per model
 last_activity: Dict[str, datetime] = {}
 
+# Metrics history storage (stores last 30 samples = 5 minutes with 10-sec collection interval)
+class MetricsHistory:
+    """Store rolling history of metrics for calculating averages"""
+
+    def __init__(self, max_size: int = 30):
+        self.max_size = max_size
+        # GPU metrics per GPU index
+        self.gpu_utilization: Dict[int, deque] = {}
+        self.gpu_vram_percent: Dict[int, deque] = {}
+        # vLLM metrics per model name
+        self.model_active_requests: Dict[str, deque] = {}
+
+    def add_gpu_metrics(self, gpu_index: int, utilization: Optional[float], vram_percent: float):
+        """Add GPU metrics to history"""
+        if gpu_index not in self.gpu_utilization:
+            self.gpu_utilization[gpu_index] = deque(maxlen=self.max_size)
+            self.gpu_vram_percent[gpu_index] = deque(maxlen=self.max_size)
+
+        if utilization is not None:
+            self.gpu_utilization[gpu_index].append(utilization)
+        self.gpu_vram_percent[gpu_index].append(vram_percent)
+
+    def add_model_metrics(self, model_name: str, active_requests: int):
+        """Add vLLM model metrics to history"""
+        if model_name not in self.model_active_requests:
+            self.model_active_requests[model_name] = deque(maxlen=self.max_size)
+
+        self.model_active_requests[model_name].append(active_requests)
+
+    def get_gpu_averages(self, gpu_index: int) -> Dict[str, Optional[float]]:
+        """Get average GPU metrics"""
+        result = {
+            "avg_utilization": None,
+            "avg_vram_percent": None
+        }
+
+        if gpu_index in self.gpu_utilization and self.gpu_utilization[gpu_index]:
+            result["avg_utilization"] = sum(self.gpu_utilization[gpu_index]) / len(self.gpu_utilization[gpu_index])
+
+        if gpu_index in self.gpu_vram_percent and self.gpu_vram_percent[gpu_index]:
+            result["avg_vram_percent"] = sum(self.gpu_vram_percent[gpu_index]) / len(self.gpu_vram_percent[gpu_index])
+
+        return result
+
+    def get_model_averages(self, model_name: str) -> Dict[str, Optional[float]]:
+        """Get average model metrics"""
+        result = {
+            "avg_active_requests": None
+        }
+
+        if model_name in self.model_active_requests and self.model_active_requests[model_name]:
+            result["avg_active_requests"] = sum(self.model_active_requests[model_name]) / len(self.model_active_requests[model_name])
+
+        return result
+
+# Global metrics history instance
+metrics_history = MetricsHistory()
+
+# Background task control
+background_task: Optional[asyncio.Task] = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifespan - startup and shutdown"""
+    global background_task
+
+    # Startup: Start background metrics collection
+    logger.info("Starting background metrics collection task")
+    background_task = asyncio.create_task(collect_metrics_background())
+
+    yield
+
+    # Shutdown: Cancel background task
+    if background_task:
+        logger.info("Stopping background metrics collection task")
+        background_task.cancel()
+        try:
+            await background_task
+        except asyncio.CancelledError:
+            pass
+
 app = FastAPI(
     title="vLLM On-Demand Control API",
     description="Start/stop vLLM containers on demand for GPU resource management",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 class ModelInfo(BaseModel):
@@ -119,6 +204,7 @@ class ModelInfo(BaseModel):
     model_path: str
     status: str
     endpoint: Optional[str] = None
+    avg_active_requests: Optional[float] = None
 
 class HealthResponse(BaseModel):
     """Health check response"""
@@ -400,13 +486,17 @@ async def list_models():
         status = get_container_status(config["container"])
         endpoint = f"http://akili.lab.rodhouse.net:{config['port']}" if status == "running" else None
 
+        # Get average metrics from history
+        averages = metrics_history.get_model_averages(name)
+
         models_info[name] = ModelInfo(
             name=name,
             container=config["container"],
             port=config["port"],
             model_path=config["model_path"],
             status=status,
-            endpoint=endpoint
+            endpoint=endpoint,
+            avg_active_requests=averages["avg_active_requests"]
         )
 
     return models_info
@@ -640,13 +730,77 @@ async def restart_model(model_name: str):
     # Start
     return await start_model(model_name)
 
+async def collect_metrics_background():
+    """
+    Background task that collects GPU and vLLM metrics every 10 seconds
+    and stores them in history for calculating averages
+    """
+    while True:
+        try:
+            # Collect GPU metrics
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=index,utilization.gpu,memory.used,memory.total",
+                    "--format=csv,noheader,nounits"
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=5
+            )
+
+            for line in result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) < 4:
+                    continue
+
+                gpu_index = int(parts[0])
+                utilization = float(parts[1]) if parts[1] != '[N/A]' else None
+                memory_used_mb = int(parts[2]) if parts[2] != '[N/A]' else None
+                memory_total_mb = int(parts[3]) if parts[3] != '[N/A]' else None
+
+                if memory_used_mb is not None and memory_total_mb is not None:
+                    vram_percent = (memory_used_mb / memory_total_mb) * 100
+                    metrics_history.add_gpu_metrics(gpu_index, utilization, vram_percent)
+
+            # Collect vLLM metrics for running models
+            for model_name, config in MODELS.items():
+                status = get_container_status(config["container"])
+                if status == "running":
+                    try:
+                        endpoint = f"http://localhost:{config['port']}/metrics"
+                        response = requests.get(endpoint, timeout=2)
+                        if response.ok:
+                            # Parse Prometheus metrics
+                            active_requests = 0
+                            for line in response.text.split('\n'):
+                                if line.startswith('vllm:num_requests_running'):
+                                    match = re.search(r'\s+(\d+(?:\.\d+)?)$', line)
+                                    if match:
+                                        active_requests = int(float(match.group(1)))
+                                        break
+
+                            metrics_history.add_model_metrics(model_name, active_requests)
+                    except Exception as e:
+                        logger.debug(f"Failed to collect metrics for {model_name}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error in background metrics collection: {e}")
+
+        # Wait 10 seconds before next collection
+        await asyncio.sleep(10)
+
 @app.get("/api/gpu")
 async def get_gpu_status():
     """
     Get GPU hardware status from nvidia-smi
 
     Returns VRAM usage, temperature, utilization, and power draw
-    for all GPUs in the system.
+    for all GPUs in the system, with rolling averages.
     """
     try:
         # Query nvidia-smi for GPU stats
@@ -670,16 +824,29 @@ async def get_gpu_status():
             if len(parts) < 8:
                 continue
 
-            gpus.append({
-                "index": int(parts[0]),
+            gpu_index = int(parts[0])
+            utilization = float(parts[3]) if parts[3] != '[N/A]' else None
+            memory_used_mb = int(parts[4]) if parts[4] != '[N/A]' else None
+            memory_total_mb = int(parts[5]) if parts[5] != '[N/A]' else None
+
+            # Get averages from history
+            averages = metrics_history.get_gpu_averages(gpu_index)
+
+            gpu_data = {
+                "index": gpu_index,
                 "name": parts[1],
                 "temperature": float(parts[2]) if parts[2] != '[N/A]' else None,
-                "utilization": float(parts[3]) if parts[3] != '[N/A]' else None,
-                "memory_used_mb": int(parts[4]) if parts[4] != '[N/A]' else None,
-                "memory_total_mb": int(parts[5]) if parts[5] != '[N/A]' else None,
+                "utilization": utilization,
+                "memory_used_mb": memory_used_mb,
+                "memory_total_mb": memory_total_mb,
                 "power_draw_w": float(parts[6]) if parts[6] != '[N/A]' else None,
                 "power_limit_w": float(parts[7]) if parts[7] != '[N/A]' else None,
-            })
+                # Add averages
+                "avg_utilization": averages["avg_utilization"],
+                "avg_vram_percent": averages["avg_vram_percent"]
+            }
+
+            gpus.append(gpu_data)
 
         return {"gpus": gpus}
 
