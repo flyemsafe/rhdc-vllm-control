@@ -613,13 +613,35 @@
                 document.getElementById('apiStatus').textContent = '✓';
                 document.getElementById('apiStatus').style.color = '#10b981';
 
-                // Build models grid
-                container.innerHTML = '';
+                // Smart update: only update cards that changed, don't rebuild everything
                 container.className = 'models-grid';
 
+                // Track which models we've seen
+                const seenModels = new Set();
+
                 for (const [name, model] of modelsList) {
-                    const card = await createModelCard(name, model);
-                    container.appendChild(card);
+                    seenModels.add(name);
+
+                    // Check if card already exists
+                    let existingCard = container.querySelector(`[data-model-name="${name}"]`);
+
+                    if (existingCard) {
+                        // Update existing card without rebuilding
+                        await updateModelCard(existingCard, name, model);
+                    } else {
+                        // Create new card
+                        const card = await createModelCard(name, model);
+                        container.appendChild(card);
+                    }
+                }
+
+                // Remove cards for models that no longer exist
+                const allCards = container.querySelectorAll('[data-model-name]');
+                for (const card of allCards) {
+                    const modelName = card.getAttribute('data-model-name');
+                    if (!seenModels.has(modelName)) {
+                        card.remove();
+                    }
                 }
 
             } catch (error) {
@@ -633,6 +655,7 @@
         async function createModelCard(name, model) {
             const card = document.createElement('div');
             card.className = 'model-card';
+            card.setAttribute('data-model-name', name);
 
             // Fetch vLLM metrics if model is running
             let metricsHTML = '';
@@ -739,6 +762,54 @@
                 </div>
             `;
             return card;
+        }
+
+        async function updateModelCard(card, name, model) {
+            // Update status badge
+            const statusBadge = card.querySelector('.status-badge');
+            if (statusBadge) {
+                statusBadge.textContent = model.status;
+                statusBadge.className = `status-badge status-${model.status}`;
+            }
+
+            // Update button states
+            const startBtn = card.querySelector('.btn-start');
+            const stopBtn = card.querySelector('.btn-stop');
+            if (startBtn) startBtn.disabled = (model.status === 'running');
+            if (stopBtn) stopBtn.disabled = (model.status !== 'running');
+
+            // Update metrics if model is running
+            const metricsSection = card.querySelector('.metrics-section');
+            if (model.status === 'running' && model.endpoint) {
+                const metrics = await fetchMetrics(`${model.endpoint}/metrics`);
+                if (metrics && metricsSection) {
+                    // Update active requests
+                    const activeReqValue = metricsSection.querySelector('.metric-value');
+                    if (activeReqValue) {
+                        const activeRequests = metrics['vllm:num_requests_running'] || 0;
+                        const activeReqAvg = model.avg_active_requests != null ? ` <span style="font-size: 11px; color: #3b82f6;">(avg: ${model.avg_active_requests.toFixed(1)})</span>` : '';
+                        activeReqValue.innerHTML = `${activeRequests}${activeReqAvg}`;
+                    }
+                }
+            } else if (metricsSection) {
+                // Remove metrics section if model stopped
+                metricsSection.remove();
+            }
+
+            // Add/remove API docs button
+            const actions = card.querySelector('.model-actions');
+            let docsBtn = actions.querySelector('.btn-endpoint');
+            if (model.endpoint && !docsBtn) {
+                // Add button
+                docsBtn = document.createElement('button');
+                docsBtn.className = 'btn-endpoint';
+                docsBtn.onclick = () => window.open(`${model.endpoint}/docs`, '_blank');
+                docsBtn.textContent = 'Open API Docs';
+                actions.appendChild(docsBtn);
+            } else if (!model.endpoint && docsBtn) {
+                // Remove button
+                docsBtn.remove();
+            }
         }
 
         async function startModel(name) {
