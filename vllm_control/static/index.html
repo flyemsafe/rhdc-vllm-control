@@ -614,6 +614,11 @@
                 document.getElementById('apiStatus').style.color = '#10b981';
 
                 // Smart update: only update cards that changed, don't rebuild everything
+                // First load: clear the "Loading models..." placeholder
+                if (container.classList.contains('loading')) {
+                    container.innerHTML = '';
+                    container.classList.remove('loading');
+                }
                 container.className = 'models-grid';
 
                 // Track which models we've seen
